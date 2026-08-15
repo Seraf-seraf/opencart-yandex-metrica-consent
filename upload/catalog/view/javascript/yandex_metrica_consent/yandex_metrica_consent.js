@@ -1,7 +1,78 @@
 (function(window, document) {
 	'use strict';
 
-	var config = window.YandexMetricaConsentConfig || {};
+	function isObject(value) {
+		return value !== null && typeof value === 'object' && !Array.isArray(value);
+	}
+
+	function normalizeConfig(raw) {
+		if (!isObject(raw) || !/^\d{5,12}$/.test(String(raw.counter || '')) || !isObject(raw.banner)) {
+			return null;
+		}
+
+		var banner = {};
+
+		for (var index = 0; index < ['title', 'description', 'accept', 'reject', 'settings', 'privacy'].length; index++) {
+			var field = ['title', 'description', 'accept', 'reject', 'settings', 'privacy'][index];
+			var value = typeof raw.banner[field] === 'string' ? raw.banner[field].trim() : '';
+
+			if (!value) {
+				return null;
+			}
+
+			banner[field] = value;
+		}
+
+		var cookieDays = Number(raw.cookieDays);
+
+		if (!Number.isInteger(cookieDays) || cookieDays < 1 || cookieDays > 730) {
+			cookieDays = 365;
+		}
+
+		var privacyUrl = typeof raw.privacyUrl === 'string' ? raw.privacyUrl.trim() : '';
+
+		if (privacyUrl && !/^(?:https?:\/\/|\/|index\.php)/i.test(privacyUrl)) {
+			privacyUrl = '';
+		}
+
+		var goals = isObject(raw.goals) ? raw.goals : {};
+
+		return {
+			counter: Number(raw.counter),
+			webvisor: Boolean(raw.webvisor),
+			ecommerce: Boolean(raw.ecommerce),
+			currency: typeof raw.currency === 'string' && /^[A-Z]{3}$/.test(raw.currency) ? raw.currency : 'RUB',
+			ecommerceEvent: isObject(raw.ecommerceEvent) ? raw.ecommerceEvent : {},
+			goals: {
+				orderSuccess: Boolean(goals.orderSuccess),
+				checkoutStart: Boolean(goals.checkoutStart),
+				contactSubmit: Boolean(goals.contactSubmit)
+			},
+			cookieDays: cookieDays,
+			privacyUrl: privacyUrl,
+			banner: banner
+		};
+	}
+
+	function readConfig(element) {
+		if (!element) {
+			return null;
+		}
+
+		try {
+			return normalizeConfig(JSON.parse(element.getAttribute('data-config') || '{}'));
+		} catch (error) {
+			return null;
+		}
+	}
+
+	var configElement = document.getElementById('yandex-metrica-consent-config');
+	var config = readConfig(configElement);
+
+	if (!config) {
+		return;
+	}
+
 	var cookieName = 'sylora_cookie_consent';
 	var analyticsChoice = 'v1:analytics';
 	var essentialChoice = 'v1:essential';
@@ -202,7 +273,7 @@
 		banner.appendChild(inner);
 		document.body.appendChild(banner);
 
-		var footer = document.querySelector('.site-footer__bottom, footer');
+		var footer = document.querySelector('.site-footer__bottom');
 
 		if (footer) {
 			var settings = document.createElement('button');
