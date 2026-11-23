@@ -39,6 +39,10 @@ class Element {
 		return this.attributes.get(name) || '';
 	}
 
+	removeAttribute(name) {
+		this.attributes.delete(name);
+	}
+
 	appendChild(child) {
 		child.parentNode = this;
 		this.children.push(child);
@@ -72,11 +76,9 @@ class Element {
 	}
 
 	closest(selector) {
-		if (selector === '[data-cookie-consent]' && this.attributes.has('data-cookie-consent')) {
-			return this;
-		}
+		const attribute = selector.match(/^\[([\w-]+)\]$/)?.[1];
 
-		if (selector === '[data-cookie-settings]' && this.attributes.has('data-cookie-settings')) {
+		if (attribute && this.attributes.has(attribute)) {
 			return this;
 		}
 
@@ -108,8 +110,20 @@ class Element {
 		return null;
 	}
 
+	get isConnected() {
+		return this.parentNode !== null;
+	}
+
+	showModal() {
+		this.setAttribute('open', '');
+	}
+
+	close() {
+		this.attributes.delete('open');
+	}
+
 	focus() {
-		this.ownerDocument.focused = this;
+		this.ownerDocument.activeElement = this;
 	}
 }
 
@@ -120,6 +134,7 @@ class Document {
 		this.scripts = [];
 		this.listeners = new Map();
 		this.cookies = new Map();
+		this.cookieWrites = [];
 		this.body = new Element('body', this);
 		this.head = new Element('head', this);
 		this.footer = new Element('footer', this);
@@ -137,6 +152,7 @@ class Document {
 	}
 
 	set cookie(value) {
+		this.cookieWrites.push(value);
 		const parts = value.split(';').map((part) => part.trim());
 		const separator = parts[0].indexOf('=');
 		const name = parts[0].slice(0, separator);
@@ -263,6 +279,13 @@ test('does not request Metrica before consent', () => {
 	assert.equal(banner.getAttribute('aria-modal'), 'false');
 	assert.equal(document.getElementById('analytics-cookie-title').textContent, 'Аналитические cookies');
 	assert.equal(document.getElementById('analytics-cookie-description').textContent, 'Описание');
+
+	window.SyloraCookieConsent.open();
+	banner.emit('cancel', {preventDefault() {}});
+	assert.equal(banner.hidden, false);
+	assert.equal(banner.getAttribute('data-cookie-mode'), '');
+	assert.equal(banner.querySelector('[data-cookie-close]').hidden, true);
+	assert.deepEqual(document.cookieWrites, []);
 });
 
 test('loads Metrica exactly once after repeated analytics consent', () => {
@@ -277,51 +300,82 @@ test('loads Metrica exactly once after repeated analytics consent', () => {
 	assert.match(document.cookie, /sylora_cookie_consent=v1%3Aanalytics/);
 });
 
-test('reopens cookie settings without changing saved choices', () => {
+test('closes and reopens settings without writing the saved choice', () => {
 	for (const savedChoice of [
-		{name: 'analytics', value: 'v1:analytics', requestCount: 1},
-		{name: 'essential', value: 'v1:essential', requestCount: 0}
+		{name: 'analytics', value: 'v1:analytics', label: 'Текущий выбор: аналитика разрешена', requestCount: 1},
+		{name: 'essential', value: 'v1:essential', label: 'Текущий выбор: без аналитики', requestCount: 0},
 	]) {
 		const {document, window} = execute();
 		const banner = document.getElementById('analytics-cookie-banner');
 		const choiceButton = banner.querySelector('[data-cookie-consent="' + savedChoice.name + '"]');
 		const settingsButton = document.footer.querySelector('[data-cookie-settings]');
-		const initialTitle = document.getElementById('analytics-cookie-title');
-
-		assert.equal(initialTitle.textContent, 'Аналитические cookies');
+		const changes = [];
+		document.addEventListener('sylora:cookie-consent-changed', (event) => changes.push(event.detail.choice));
 		banner.emit('click', {target: choiceButton});
-		assert.equal(window.SyloraCookieConsent.getChoice(), savedChoice.value);
+		const writesAfterChoice = document.cookieWrites.slice();
+		const counterDisabledAfterChoice = window.disableYaCounter110751771;
 
-		const requestsAfterChoice = document.requests.slice();
-
-		for (let opening = 0; opening < 2; opening++) {
+		for (const dismiss of [
+			(close) => close.emit('click', {target: close}),
+			() => banner.emit('cancel', {preventDefault() {}}),
+		]) {
 			document.dispatchEvent({type: 'click', target: settingsButton, preventDefault() {}});
+			const close = banner.querySelector('[data-cookie-close]');
+
 			assert.equal(banner.hidden, false);
 			assert.equal(banner.getAttribute('data-cookie-mode'), 'settings');
 			assert.equal(banner.getAttribute('aria-modal'), 'true');
-			assert.equal(document.getElementById('analytics-cookie-title').textContent, 'Настройки cookie');
-			assert.equal(document.getElementById('analytics-cookie-description').textContent, 'Вы можете изменить выбор в любой момент. Аналитические cookie используются только с вашего согласия.');
-			assert.equal(banner.children[0].children[0].children[0].textContent, 'Charm by Sylora');
-			assert.equal(banner.children[0].children[0].children[1].textContent, 'украшения ручной работы');
-			assert.equal(banner.children[0].children[1].children[2].children[0].textContent, 'Политика');
-			assert.equal(banner.children[0].children[1].children[2].children[0].href, '/privacy-policy');
-			assert.equal(window.SyloraCookieConsent.getChoice(), savedChoice.value);
-			assert.deepEqual(document.requests, requestsAfterChoice);
-			assert.equal(document.requests.length, savedChoice.requestCount);
+			assert.equal(document.getElementById('analytics-cookie-title').textContent, 'Настройки аналитики');
+			assert.equal(document.getElementById('analytics-cookie-choice').textContent, savedChoice.label);
+			assert.equal(banner.querySelector('[data-cookie-privacy]').href, '/privacy-policy');
+			assert.equal(close.hidden, false);
+			assert.equal(document.activeElement, close);
 
-			banner.emit('click', {target: choiceButton});
+			dismiss(close);
 			assert.equal(banner.hidden, true);
 			assert.equal(banner.getAttribute('aria-modal'), 'false');
+			assert.equal(document.activeElement, settingsButton);
+			assert.equal(window.SyloraCookieConsent.getChoice(), savedChoice.value);
+			assert.deepEqual(document.cookieWrites, writesAfterChoice);
+			assert.deepEqual(changes, [savedChoice.value]);
+			assert.equal(document.requests.length, savedChoice.requestCount);
+			assert.equal(window.disableYaCounter110751771, counterDisabledAfterChoice);
 		}
 	}
 });
 
-test('styles the reopened settings as a full-screen state', () => {
-	assert.match(stylesheet, /\.ym-consent__brand\s*\{\s*display:\s*none;\s*\}/);
-	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s*\{[^}]*inset:\s*0;/s);
-	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s*\{[^}]*background:\s*#efece5;/s);
-	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s+\.ym-consent__inner\s*\{[^}]*min-height:\s*100vh;/s);
-	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s+\.ym-consent__brand\s*\{[^}]*display:\s*block;/s);
+test('still applies both settings choices through the consent lifecycle', () => {
+	const {document, window} = execute();
+	const banner = document.getElementById('analytics-cookie-banner');
+	const accept = banner.querySelector('[data-cookie-consent="analytics"]');
+	const reject = banner.querySelector('[data-cookie-consent="essential"]');
+	const changes = [];
+	let reloaded = false;
+	window.location.reload = () => { reloaded = true; };
+	document.addEventListener('sylora:cookie-consent-changed', (event) => changes.push(event.detail.choice));
+	banner.emit('click', {target: reject});
+	window.SyloraCookieConsent.open();
+	banner.emit('click', {target: accept});
+	assert.equal(window.SyloraCookieConsent.getChoice(), 'v1:analytics');
+	assert.equal(banner.hidden, true);
+	assert.equal(window.disableYaCounter110751771, false);
+	assert.equal(reloaded, false);
+	assert.deepEqual(document.requests, ['https://mc.yandex.ru/metrika/tag.js']);
+
+	document.cookie = '_ym_uid=tracked';
+	window.SyloraCookieConsent.open();
+	banner.emit('click', {target: reject});
+	assert.equal(window.SyloraCookieConsent.getChoice(), 'v1:essential');
+	assert.equal(banner.hidden, true);
+	assert.equal(window.disableYaCounter110751771, true);
+	assert.doesNotMatch(document.cookie, /_ym_uid/);
+	assert.equal(reloaded, true);
+	assert.deepEqual(changes, ['v1:essential', 'v1:analytics', 'v1:essential']);
+});
+
+test('styles settings as a compact dialog with a translucent backdrop and inner scroll', () => {
+	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]::backdrop\s*\{[^}]*background:\s*rgb\(48 37 30 \/ 33%\);/s);
+	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s*\{[^}]*max-width:\s*560px;[^}]*overflow-y:\s*auto;/s);
 	assert.match(stylesheet, /\.ym-consent__privacy a\s*\{\s*color:\s*var\(--color-muted,\s*#6c6158\);\s*\}/);
 });
 
