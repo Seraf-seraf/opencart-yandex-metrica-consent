@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const script = fs.readFileSync(path.join(root, 'upload/catalog/view/javascript/yandex_metrica_consent/yandex_metrica_consent.js'), 'utf8');
+const stylesheet = fs.readFileSync(path.join(root, 'upload/catalog/view/javascript/yandex_metrica_consent/yandex_metrica_consent.css'), 'utf8');
 const template = fs.readFileSync(path.join(root, 'upload/catalog/view/theme/default/template/extension/analytics/yandex_metrica.twig'), 'utf8');
 
 class Element {
@@ -199,7 +200,11 @@ class Document {
 		this.listeners.get(type).push(listener);
 	}
 
-	dispatchEvent() {
+	dispatchEvent(event) {
+		for (const listener of this.listeners.get(event.type) || []) {
+			listener(event);
+		}
+
 		return true;
 	}
 
@@ -249,10 +254,15 @@ function execute(config = validConfig()) {
 
 test('does not request Metrica before consent', () => {
 	const {document, window} = execute();
+	const banner = document.getElementById('analytics-cookie-banner');
 
 	assert.deepEqual(document.requests, []);
 	assert.equal(window.dataLayer, undefined);
-	assert.equal(document.getElementById('analytics-cookie-banner').hidden, false);
+	assert.equal(banner.hidden, false);
+	assert.equal(banner.getAttribute('data-cookie-mode'), '');
+	assert.equal(banner.getAttribute('aria-modal'), 'false');
+	assert.equal(document.getElementById('analytics-cookie-title').textContent, 'Аналитические cookies');
+	assert.equal(document.getElementById('analytics-cookie-description').textContent, 'Описание');
 });
 
 test('loads Metrica exactly once after repeated analytics consent', () => {
@@ -265,6 +275,54 @@ test('loads Metrica exactly once after repeated analytics consent', () => {
 
 	assert.deepEqual(document.requests, ['https://mc.yandex.ru/metrika/tag.js']);
 	assert.match(document.cookie, /sylora_cookie_consent=v1%3Aanalytics/);
+});
+
+test('reopens cookie settings without changing saved choices', () => {
+	for (const savedChoice of [
+		{name: 'analytics', value: 'v1:analytics', requestCount: 1},
+		{name: 'essential', value: 'v1:essential', requestCount: 0}
+	]) {
+		const {document, window} = execute();
+		const banner = document.getElementById('analytics-cookie-banner');
+		const choiceButton = banner.querySelector('[data-cookie-consent="' + savedChoice.name + '"]');
+		const settingsButton = document.footer.querySelector('[data-cookie-settings]');
+		const initialTitle = document.getElementById('analytics-cookie-title');
+
+		assert.equal(initialTitle.textContent, 'Аналитические cookies');
+		banner.emit('click', {target: choiceButton});
+		assert.equal(window.SyloraCookieConsent.getChoice(), savedChoice.value);
+
+		const requestsAfterChoice = document.requests.slice();
+
+		for (let opening = 0; opening < 2; opening++) {
+			document.dispatchEvent({type: 'click', target: settingsButton, preventDefault() {}});
+			assert.equal(banner.hidden, false);
+			assert.equal(banner.getAttribute('data-cookie-mode'), 'settings');
+			assert.equal(banner.getAttribute('aria-modal'), 'true');
+			assert.equal(document.getElementById('analytics-cookie-title').textContent, 'Настройки cookie');
+			assert.equal(document.getElementById('analytics-cookie-description').textContent, 'Вы можете изменить выбор в любой момент. Аналитические cookie используются только с вашего согласия.');
+			assert.equal(banner.children[0].children[0].children[0].textContent, 'Charm by Sylora');
+			assert.equal(banner.children[0].children[0].children[1].textContent, 'украшения ручной работы');
+			assert.equal(banner.children[0].children[1].children[2].children[0].textContent, 'Политика');
+			assert.equal(banner.children[0].children[1].children[2].children[0].href, '/privacy-policy');
+			assert.equal(window.SyloraCookieConsent.getChoice(), savedChoice.value);
+			assert.deepEqual(document.requests, requestsAfterChoice);
+			assert.equal(document.requests.length, savedChoice.requestCount);
+
+			banner.emit('click', {target: choiceButton});
+			assert.equal(banner.hidden, true);
+			assert.equal(banner.getAttribute('aria-modal'), 'false');
+		}
+	}
+});
+
+test('styles the reopened settings as a full-screen state', () => {
+	assert.match(stylesheet, /\.ym-consent__brand\s*\{\s*display:\s*none;\s*\}/);
+	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s*\{[^}]*inset:\s*0;/s);
+	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s*\{[^}]*background:\s*#efece5;/s);
+	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s+\.ym-consent__inner\s*\{[^}]*min-height:\s*100vh;/s);
+	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s+\.ym-consent__brand\s*\{[^}]*display:\s*block;/s);
+	assert.match(stylesheet, /\.ym-consent__privacy a\s*\{\s*color:\s*var\(--color-muted,\s*#6c6158\);\s*\}/);
 });
 
 test('rejects invalid config without rendering or requests', () => {
