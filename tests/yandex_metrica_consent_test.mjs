@@ -375,7 +375,8 @@ test('still applies both settings choices through the consent lifecycle', () => 
 
 test('styles settings as a compact dialog with a translucent backdrop and inner scroll', () => {
 	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]::backdrop\s*\{[^}]*background:\s*rgb\(48 37 30 \/ 33%\);/s);
-	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s*\{[^}]*max-width:\s*560px;[^}]*overflow-y:\s*auto;/s);
+	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s*\{[^}]*max-width:\s*560px;[^}]*overflow:\s*hidden;/s);
+	assert.match(stylesheet, /\.ym-consent\[data-cookie-mode="settings"\]\s+\.ym-consent__body\s*\{[^}]*overflow:\s*auto;/s);
 	assert.match(stylesheet, /\.ym-consent__privacy a\s*\{\s*color:\s*var\(--color-muted,\s*#6c6158\);\s*\}/);
 });
 
